@@ -1,0 +1,280 @@
+name: AI Review
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: ai-review-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  ai-review-control-plane:
+    name: AI review control plane
+    if: >
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/ai-review')
+    runs-on: [self-hosted, macos, your-runner-label]
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Resolve PR state and apply control-plane actions
+        id: resolve
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issueNumber = context.payload.issue.number;
+            const comment = context.payload.comment;
+            const username = comment.user.login;
+            const commentBody = comment.body.trim();
+            const commandMatch = commentBody.match(/^\/ai-review(?:\s+(claude|codex))?\s*$/i);
+
+            if (!commandMatch) {
+              core.setFailed("Invalid command. Use /ai-review, /ai-review claude, or /ai-review codex.");
+              return;
+            }
+
+            const provider = (commandMatch[1] || "claude").toLowerCase() === "codex" ? "codex" : "claude";
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: issueNumber,
+            });
+
+            if (pr.state !== "open" || pr.draft) {
+              core.setFailed(`PR #${issueNumber} is not eligible for AI review.`);
+              return;
+            }
+
+            core.setOutput("provider", provider);
+            core.setOutput("pr_number", issueNumber.toString());
+            core.setOutput("pr_title", pr.title || "");
+            core.setOutput("pr_author", pr.user?.login || "");
+            core.setOutput("head_sha", pr.head.sha);
+            core.setOutput("head_ref", pr.head.ref);
+            core.setOutput("head_repo", pr.head.repo?.full_name || `${owner}/${repo}`);
+            core.setOutput("base_sha", pr.base.sha);
+            core.setOutput("base_ref", pr.base.ref);
+            core.setOutput("base_repo", pr.base.repo?.full_name || `${owner}/${repo}`);
+            core.setOutput("additions", pr.additions.toString());
+            core.setOutput("deletions", pr.deletions.toString());
+            core.setOutput("changed_files", pr.changed_files.toString());
+            core.setOutput("commenter", username);
+            core.setOutput("risk_mode", pr.changed_files > 60 ? "risk-summary" : "line-review");
+
+      - name: Checkout PR head
+        id: checkout_pr_head
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ steps.resolve.outputs.head_repo }}
+          ref: ${{ steps.resolve.outputs.head_sha }}
+          fetch-depth: 0
+
+      - name: Validate local AI review script
+        id: validate_local_ai_review_script
+        run: |
+          if ! command -v node >/dev/null 2>&1; then
+            echo "node is required to execute .github/scripts/ai-review-run.mjs" >&2
+            exit 1
+          fi
+
+      - name: Load repo AI review overrides
+        id: load_repo_ai_review_config
+        run: |
+          ruby <<'RUBY'
+          require "json"
+          require "yaml"
+
+          config_path = ".github/ai-review/config.yml"
+          config = {}
+
+          if File.exist?(config_path)
+            loaded = YAML.safe_load(
+              File.read(config_path),
+              permitted_classes: [],
+              permitted_symbols: [],
+              aliases: true
+            )
+            config = loaded.is_a?(Hash) ? loaded : {}
+          end
+
+          string_list = lambda do |value|
+            Array(value).flatten.compact.map(&:to_s).reject(&:empty?)
+          end
+
+          normalized = {
+            reviewer_notes: config["reviewer_notes"].to_s,
+            ignored_paths: string_list.call(config["ignored_paths"]),
+            high_priority_paths: string_list.call(config["high_priority_paths"]),
+            review_mode: config["review_mode"].to_s,
+            inline_comment_limit: config["inline_comment_limit"],
+            summary_findings_limit: config["summary_findings_limit"],
+            prompt_fragments: string_list.call(config["prompt_fragments"]),
+          }
+
+          prompt_context_lines = []
+          prompt_context_lines << "Repo reviewer notes:" if normalized[:reviewer_notes] != ""
+          prompt_context_lines << normalized[:reviewer_notes] if normalized[:reviewer_notes] != ""
+          prompt_context_lines << "" unless prompt_context_lines.empty?
+          prompt_context_lines << "Ignored paths: #{normalized[:ignored_paths].join(', ')}" if normalized[:ignored_paths].any?
+          prompt_context_lines << "High priority paths: #{normalized[:high_priority_paths].join(', ')}" if normalized[:high_priority_paths].any?
+          prompt_context_lines << "" if normalized[:prompt_fragments].any? && !prompt_context_lines.empty?
+          if normalized[:prompt_fragments].any?
+            prompt_context_lines << "Repo prompt fragments:"
+            normalized[:prompt_fragments].each_with_index do |fragment, index|
+              prompt_context_lines << "#{index + 1}. #{fragment}"
+            end
+          end
+          prompt_context = prompt_context_lines.join("\n").strip
+
+          File.open(ENV.fetch("GITHUB_OUTPUT"), "a") do |file|
+            config_present = File.exist?(config_path) ? "yes" : "no"
+            file.puts "repo_config_present=#{config_present}"
+            file.puts "repo_config_json<<EOF"
+            file.puts JSON.generate(normalized)
+            file.puts "EOF"
+            file.puts "repo_reviewer_notes<<EOF"
+            file.puts normalized[:reviewer_notes]
+            file.puts "EOF"
+            file.puts "repo_ignored_paths_json<<EOF"
+            file.puts JSON.generate(normalized[:ignored_paths])
+            file.puts "EOF"
+            file.puts "repo_high_priority_paths_json<<EOF"
+            file.puts JSON.generate(normalized[:high_priority_paths])
+            file.puts "EOF"
+            file.puts "repo_prompt_fragments_json<<EOF"
+            file.puts JSON.generate(normalized[:prompt_fragments])
+            file.puts "EOF"
+            file.puts "repo_prompt_context<<EOF"
+            file.puts prompt_context
+            file.puts "EOF"
+            file.puts "repo_review_mode=#{normalized[:review_mode]}"
+            file.puts "repo_inline_comment_limit=#{normalized[:inline_comment_limit]}"
+            file.puts "repo_summary_findings_limit=#{normalized[:summary_findings_limit]}"
+          end
+          RUBY
+
+      - name: Run local AI review
+        id: stub
+        timeout-minutes: 20
+        env:
+          PROVIDER: ${{ steps.resolve.outputs.provider }}
+          PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
+          PR_TITLE: ${{ steps.resolve.outputs.pr_title }}
+          ADDITIONS: ${{ steps.resolve.outputs.additions }}
+          DELETIONS: ${{ steps.resolve.outputs.deletions }}
+          CHANGED_FILES: ${{ steps.resolve.outputs.changed_files }}
+          HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
+          HEAD_REF: ${{ steps.resolve.outputs.head_ref }}
+          HEAD_REPO: ${{ steps.resolve.outputs.head_repo }}
+          BASE_SHA: ${{ steps.resolve.outputs.base_sha }}
+          BASE_REF: ${{ steps.resolve.outputs.base_ref }}
+          BASE_REPO: ${{ steps.resolve.outputs.base_repo }}
+          PR_AUTHOR: ${{ steps.resolve.outputs.pr_author }}
+          COMMENTER: ${{ steps.resolve.outputs.commenter }}
+          REVIEW_WORKSPACE: ${{ github.workspace }}
+          AI_REVIEW_ARTIFACT_DIR: ${{ runner.temp }}/ai-review-${{ github.run_id }}
+          AI_REVIEW_REPO_CONFIG_JSON: ${{ steps.load_repo_ai_review_config.outputs.repo_config_json }}
+          AI_REVIEW_REPO_REVIEWER_NOTES: ${{ steps.load_repo_ai_review_config.outputs.repo_reviewer_notes }}
+          AI_REVIEW_REPO_IGNORED_PATHS_JSON: ${{ steps.load_repo_ai_review_config.outputs.repo_ignored_paths_json }}
+          AI_REVIEW_REPO_HIGH_PRIORITY_PATHS_JSON: ${{ steps.load_repo_ai_review_config.outputs.repo_high_priority_paths_json }}
+          AI_REVIEW_REPO_PROMPT_FRAGMENTS_JSON: ${{ steps.load_repo_ai_review_config.outputs.repo_prompt_fragments_json }}
+          AI_REVIEW_REPO_PROMPT_CONTEXT: ${{ steps.load_repo_ai_review_config.outputs.repo_prompt_context }}
+          AI_REVIEW_REPO_REVIEW_MODE: ${{ steps.load_repo_ai_review_config.outputs.repo_review_mode }}
+          AI_REVIEW_REPO_INLINE_COMMENT_LIMIT: ${{ steps.load_repo_ai_review_config.outputs.repo_inline_comment_limit }}
+          AI_REVIEW_REPO_SUMMARY_FINDINGS_LIMIT: ${{ steps.load_repo_ai_review_config.outputs.repo_summary_findings_limit }}
+        run: |
+          node .github/scripts/ai-review-run.mjs >> "$GITHUB_OUTPUT"
+
+      - name: Upload AI review artifacts
+        id: upload_ai_review_artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: ai-review-${{ steps.resolve.outputs.pr_number }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/ai-review-${{ github.run_id }}
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Post AI review comment
+        id: post_ai_review_comment
+        if: always()
+        uses: actions/github-script@v9
+        env:
+          PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
+          PR_TITLE: ${{ steps.resolve.outputs.pr_title }}
+          PR_AUTHOR: ${{ steps.resolve.outputs.pr_author }}
+          COMMENTER: ${{ steps.resolve.outputs.commenter }}
+          ADDITIONS: ${{ steps.resolve.outputs.additions }}
+          DELETIONS: ${{ steps.resolve.outputs.deletions }}
+          CHANGED_FILES: ${{ steps.resolve.outputs.changed_files }}
+          PR_CLASSIFICATION: ${{ steps.stub.outputs.pr_classification }}
+          PROVIDER: ${{ steps.stub.outputs.provider }}
+          REVIEW_PAYLOAD: ${{ steps.stub.outputs.review_payload }}
+          REVIEW_COMMENT_BODY: ${{ steps.stub.outputs.review_comment_body }}
+        with:
+          script: |
+            const body = (process.env.REVIEW_COMMENT_BODY || "").trim() || [
+              "AI review command accepted.",
+              "Review completed successfully. No Findings.",
+              "",
+              `- PR: #${process.env.PR_NUMBER}`,
+              `- Title: ${process.env.PR_TITLE || "unknown"}`,
+              `- Provider: \`${process.env.PROVIDER || "unknown"}\``,
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body,
+            });
+
+      - name: Notify Slack on failure
+        if: failure()
+        continue-on-error: true
+        uses: actions/github-script@v9
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
+          PR_TITLE: ${{ steps.resolve.outputs.pr_title }}
+          PROVIDER: ${{ steps.resolve.outputs.provider }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const token = process.env.SLACK_BOT_TOKEN;
+            const channel = process.env.SLACK_CHANNEL_ID;
+
+            if (!token || !channel) {
+              core.warning("Slack notification skipped because Slack secrets are not configured.");
+              return;
+            }
+
+            const text = [
+              ":rotating_light: AI review GitHub Actions failed",
+              `PR #${process.env.PR_NUMBER || "unknown"}: ${process.env.PR_TITLE || "unknown"}`,
+              `Provider: ${process.env.PROVIDER || "unknown"}`,
+              `Run: ${process.env.WORKFLOW_URL || ""}`,
+            ].join("\n");
+
+            const response = await fetch("https://slack.com/api/chat.postMessage", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json; charset=utf-8",
+              },
+              body: JSON.stringify({ channel, text }),
+            });
+
+            const data = await response.json();
+            if (!data.ok) {
+              core.warning(`Slack notification failed: ${data.error || response.statusText}`);
+            }

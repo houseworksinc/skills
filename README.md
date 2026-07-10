@@ -17,6 +17,7 @@ npx skills add houseworksinc/skills
 | Skill | What it does |
 |---|---|
 | `rca-writer` | Generates a structured post-mortem `.md` from your Claude Code / Codex session, git diffs, or log snippets — following the HouseWorks incident template. Creates and links Linear tickets tagged `incident`. |
+| `github-ai-review-workflow` | Packages a reusable `/ai-review` GitHub Actions workflow, runner script, and Slack failure alerting contract for copy/paste reuse across repositories. |
 
 ## Usage
 
@@ -39,6 +40,8 @@ Claude will ask for metadata it can't infer (Incident ID, Sev, IST timestamps), 
 ```
 skills/
   rca-writer/
+    SKILL.md
+  github-ai-review-workflow/
     SKILL.md
 ```
 
