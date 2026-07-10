@@ -1,0 +1,31 @@
+# Repo-specific AI review overrides
+#
+# Copy this file to `.github/ai-review/config.yml` in the target repo and adjust as needed.
+# The workflow / runner should treat every field here as optional.
+
+# Human-readable instructions to bias review style for this repo.
+reviewer_notes: |
+  Focus on scheduling invariants, state transitions, and hidden data ownership changes.
+
+# Files or globs the repo wants the reviewer to ignore or down-rank.
+ignored_paths:
+  - docs/**
+  - migrations/**
+
+# Files or globs that should receive extra scrutiny.
+high_priority_paths:
+  - app/**
+  - src/**
+  - .github/workflows/**
+
+# Optional tuning knobs for the reviewer implementation.
+review_mode: line-review
+inline_comment_limit: 10
+summary_findings_limit: 10
+
+# Optional repo-specific prompt fragments that the runner can append.
+prompt_fragments:
+  - |
+    Watch for behavior changes that may not be covered by tests.
+  - |
+    Prefer explicit failure modes over implicit defaults.
