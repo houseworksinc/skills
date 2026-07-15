@@ -2,8 +2,8 @@
 name: github-sbom-workflow
 description: >
   Installs the HouseWorks reusable GitHub Actions SBOM workflow. Use when a repository needs
-  CycloneDX evidence, dependency-change PR checks, durable S3 retention, and optional
-  Dependency-Track monitoring without a paid SCA platform.
+  CycloneDX evidence, dependency-change PR checks, durable S3 retention, and ClickHouse/Metabase
+  inventory reporting without a paid SCA platform.
 ---
 
 # GitHub SBOM Workflow
@@ -15,7 +15,7 @@ Reusable supply-chain control plane for HouseWorks repositories.
 - A PR and release GitHub Actions workflow template
 - A repo-local SBOM generation contract so each product scans its actual deliverable
 - A small repository configuration file
-- S3 evidence-publishing and optional Dependency-Track upload contracts
+- S3 evidence-publishing and normalized inventory reporting contracts
 - Installation and security-configuration guidance
 
 ## How to use it
@@ -27,18 +27,18 @@ Reusable supply-chain control plane for HouseWorks repositories.
 3. Add an executable `.github/scripts/generate-sbom.sh` implementing the
    [generator contract](references/generator-contract.md). It must produce
    `sbom.cdx.json` for the built release artifact or image.
-4. Configure the GitHub variables, OIDC role, and optional Dependency-Track secret described
-   in [references/dependencies.md].
+4. Configure the GitHub variables and OIDC role described in [references/dependencies.md].
 5. Start with `enforcement: report`; change it to `required` only after the pilot is accepted.
 
 ## Lifecycle
 
 - **Dependency-relevant PR:** generate and validate a candidate BOM, run OSV scanning, and
   publish short-lived reviewer evidence. No PR is uploaded to the central inventory.
-- **Release tag:** generate the authoritative BOM from the release artifact, publish it and a
-  manifest to S3, and optionally upload it to Dependency-Track for continuous monitoring.
-- **Scheduled organization report:** the ops control plane evaluates S3 manifests and the
-  catalog for missing or stale release evidence.
+- **Release tag:** generate the authoritative BOM from the release artifact, scan it, and publish
+  the BOM, checksum, metadata, and machine-readable OSV result to S3.
+- **Scheduled organization inventory:** a central normalizer imports S3 evidence into ClickHouse;
+  Metabase provides reporting and triage. Application workflows never receive ClickHouse
+  credentials.
 
 The canonical policy and repository classifications live in
 `common-houseworks-ops`, not in each product repository.
@@ -49,4 +49,5 @@ The canonical policy and repository classifications live in
 - [Repository configuration example](references/repo-config.example.yml)
 - [Generator contract](references/generator-contract.md)
 - [Dependencies and permissions](references/dependencies.md)
+- [Reporting and normalization contract](references/reporting-contract.md)
 - [Installation checklist](references/install.md)

@@ -8,8 +8,5 @@ enforcement: report # report during pilot; required after approval
 # checkout when an immutable container image or release bundle is available.
 target: image # image | filesystem | package
 
-# Optional Dependency-Track project/version names. Omit these to use S3-only evidence during a
-# pilot. Credentials remain a GitHub Actions secret, never in this file.
-dependency_track:
-  enabled: false
-  project_name: houseworksinc/example-service
+# S3 remains the evidence store. The central normalizer reads its release manifests and writes
+# derived, rebuildable data to ClickHouse; no analytics credentials belong in a product repository.

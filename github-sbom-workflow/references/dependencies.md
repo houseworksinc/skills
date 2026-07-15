@@ -11,18 +11,6 @@ Set these non-secret repository or environment variables:
 | `SBOM_S3_BUCKET` | Private S3 evidence bucket name. |
 | `SBOM_S3_PREFIX` | Common prefix, normally `sbom`. |
 
-Optional variables:
-
-| Variable | Purpose |
-|---|---|
-| `DEPENDENCY_TRACK_URL` | HTTPS base URL for the self-hosted Dependency-Track service. |
-
-## Secrets
-
-| Secret | Purpose |
-|---|---|
-| `DEPENDENCY_TRACK_API_KEY` | Team-scoped Dependency-Track API key; configure only when central upload is enabled. |
-
 ## Required permissions
 
 The workflow needs `contents: read`, `actions: read`, and `id-token: write`. The AWS role trust
@@ -32,3 +20,7 @@ contexts. Its S3 policy must only allow writes under
 listing. Use SSE-KMS and grant the role only the required KMS encrypt/data-key permissions.
 
 Do not give the workflow static AWS credentials or broad account access.
+
+ClickHouse and Metabase credentials belong only to the central normalizer and analytics stack.
+Product-repository workflows publish evidence to S3 and have no path to query or modify either
+system.
