@@ -1,0 +1,123 @@
+name: Supply-chain policy
+
+on:
+  pull_request:
+    paths:
+      - '**/package.json'
+      - '**/package-lock.json'
+      - '**/yarn.lock'
+      - '**/pnpm-lock.yaml'
+      - '**/pyproject.toml'
+      - '**/uv.lock'
+      - '**/poetry.lock'
+      - '**/requirements*.txt'
+      - '**/go.mod'
+      - '**/go.sum'
+      - '**/Cargo.lock'
+      - '**/pom.xml'
+      - '**/gradle.lockfile'
+      - '**/Dockerfile*'
+      - '**/.terraform.lock.hcl'
+      - '.github/sbom/**'
+      - '.github/scripts/generate-sbom.sh'
+      - '.github/workflows/sbom.yml'
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+jobs:
+  supply-chain-policy:
+    name: supply-chain-policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify repository configuration
+        run: |
+          test -f .github/sbom/config.yml
+          test -x .github/scripts/generate-sbom.sh
+
+      # The repository script builds/selects the appropriate immutable target and emits
+      # sbom.cdx.json. See generator-contract.md in houseworksinc/skills.
+      - name: Generate CycloneDX SBOM
+        run: .github/scripts/generate-sbom.sh
+
+      - name: Validate BOM and make evidence manifest
+        id: evidence
+        env:
+          RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
+        run: |
+          set -euo pipefail
+          jq -e '.bomFormat == "CycloneDX" and .specVersion and .metadata.component' sbom.cdx.json >/dev/null
+          sha256sum sbom.cdx.json | awk '{print $1}' > sbom.cdx.json.sha256
+          jq -n \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg revision "$GITHUB_SHA" \
+            --arg version "$RELEASE_VERSION" \
+            --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg sbom_sha256 "$(cat sbom.cdx.json.sha256)" \
+            '{repository:$repository, revision:$revision, version:$version, generated_at:$generated_at, format:"CycloneDX JSON", sbom_sha256:$sbom_sha256}' \
+            > metadata.json
+          echo "release_version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Scan candidate SBOM with OSV
+        uses: google/osv-scanner/actions/osv-scanner@v2
+        with:
+          scan-args: --sbom=sbom.cdx.json
+
+      - name: Upload PR evidence
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: sbom-${{ github.event.pull_request.number }}-${{ github.sha }}
+          path: |
+            sbom.cdx.json
+            sbom.cdx.json.sha256
+            metadata.json
+          retention-days: 14
+
+      - name: Configure AWS credentials for release evidence
+        if: github.ref_type == 'tag'
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.SBOM_AWS_ROLE_ARN }}
+          aws-region: ${{ vars.SBOM_AWS_REGION }}
+
+      - name: Publish immutable release evidence to S3
+        if: github.ref_type == 'tag'
+        env:
+          BUCKET: ${{ vars.SBOM_S3_BUCKET }}
+          PREFIX: ${{ vars.SBOM_S3_PREFIX }}
+          VERSION: ${{ steps.evidence.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          test -n "$BUCKET"
+          KEY="$PREFIX/$GITHUB_REPOSITORY/releases/$VERSION"
+          aws s3 cp sbom.cdx.json "s3://$BUCKET/$KEY/sbom.cdx.json" --sse aws:kms
+          aws s3 cp sbom.cdx.json.sha256 "s3://$BUCKET/$KEY/sbom.cdx.json.sha256" --sse aws:kms
+          aws s3 cp metadata.json "s3://$BUCKET/$KEY/metadata.json" --sse aws:kms
+
+      - name: Upload release BOM to Dependency-Track
+        if: github.ref_type == 'tag' && vars.DEPENDENCY_TRACK_URL != ''
+        env:
+          DTRACK_URL: ${{ vars.DEPENDENCY_TRACK_URL }}
+          DTRACK_API_KEY: ${{ secrets.DEPENDENCY_TRACK_API_KEY }}
+          VERSION: ${{ steps.evidence.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DTRACK_API_KEY" ]; then
+            echo "::warning::DEPENDENCY_TRACK_URL is set but DEPENDENCY_TRACK_API_KEY is absent; skipping optional upload."
+            exit 0
+          fi
+          curl --fail-with-body --silent --show-error \
+            -X POST "$DTRACK_URL/api/v1/bom" \
+            -H "X-Api-Key: $DTRACK_API_KEY" \
+            -F "autoCreate=true" \
+            -F "projectName=$GITHUB_REPOSITORY" \
+            -F "projectVersion=$VERSION" \
+            -F "bom=@sbom.cdx.json"

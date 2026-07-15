@@ -1,0 +1,15 @@
+# Repository-local SBOM settings. Canonical ownership and classification remain in
+# common-houseworks-ops/inventory/sbom/repository-catalog.yaml.
+component_name: houseworksinc/example-service
+component_type: application # application | library | infrastructure | configuration | test-tooling
+enforcement: report # report during pilot; required after approval
+
+# The local generator selects the real target. Never point a deployable service at an arbitrary
+# checkout when an immutable container image or release bundle is available.
+target: image # image | filesystem | package
+
+# Optional Dependency-Track project/version names. Omit these to use S3-only evidence during a
+# pilot. Credentials remain a GitHub Actions secret, never in this file.
+dependency_track:
+  enabled: false
+  project_name: houseworksinc/example-service
