@@ -13,6 +13,7 @@ Use this when porting the workflow into a new repository.
 
 - Copy both runner files unchanged; they satisfy the [runner contract](runner-contract.md) together.
 - Add `.github/ai-review/config.yml` if the repo wants custom reviewer behavior.
+- Use `instruction_files` in that config for repository-local reviewer-skill documents that must be included in every review prompt.
 - Add any model variables you want to support:
   - `AI_REVIEW_MODEL`
   - `AI_REVIEW_CLAUDE_MODEL`

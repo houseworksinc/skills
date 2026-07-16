@@ -30,6 +30,7 @@ override data to the script through environment variables.
 - `AI_REVIEW_ARTIFACT_DIR`
 - `AI_REVIEW_REPO_CONFIG_JSON`
 - `AI_REVIEW_REPO_REVIEWER_NOTES`
+- `AI_REVIEW_REPO_INSTRUCTION_FILES_JSON`
 - `AI_REVIEW_REPO_IGNORED_PATHS_JSON`
 - `AI_REVIEW_REPO_HIGH_PRIORITY_PATHS_JSON`
 - `AI_REVIEW_REPO_PROMPT_FRAGMENTS_JSON`
@@ -73,3 +74,4 @@ The script should write GitHub Actions outputs to `$GITHUB_OUTPUT` and, at minim
 - Populate usage and model metadata when available, even if the provider is a fallback or wrapper.
 - Merge repo override values into the prompt or scoring logic when provided.
 - Prefer `AI_REVIEW_REPO_PROMPT_CONTEXT` as the single merged prompt override input.
+- Include configured repository-local instruction files as bounded prompt context; reject absolute, traversal, and symlink paths.

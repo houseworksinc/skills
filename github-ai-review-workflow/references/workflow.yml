@@ -218,6 +218,7 @@ jobs:
 
           normalized = {
             reviewer_notes: config["reviewer_notes"].to_s,
+            instruction_files: string_list.call(config["instruction_files"]),
             ignored_paths: string_list.call(config["ignored_paths"]),
             high_priority_paths: string_list.call(config["high_priority_paths"]),
             review_mode: config["review_mode"].to_s,
@@ -230,6 +231,7 @@ jobs:
           prompt_context_lines << "Repo reviewer notes:" if normalized[:reviewer_notes] != ""
           prompt_context_lines << normalized[:reviewer_notes] if normalized[:reviewer_notes] != ""
           prompt_context_lines << "" unless prompt_context_lines.empty?
+          prompt_context_lines << "Repository instruction files: #{normalized[:instruction_files].join(', ')}" if normalized[:instruction_files].any?
           prompt_context_lines << "Ignored paths: #{normalized[:ignored_paths].join(', ')}" if normalized[:ignored_paths].any?
           prompt_context_lines << "High priority paths: #{normalized[:high_priority_paths].join(', ')}" if normalized[:high_priority_paths].any?
           prompt_context_lines << "" if normalized[:prompt_fragments].any? && !prompt_context_lines.empty?
@@ -249,6 +251,9 @@ jobs:
             file.puts "EOF"
             file.puts "repo_reviewer_notes<<EOF"
             file.puts normalized[:reviewer_notes]
+            file.puts "EOF"
+            file.puts "repo_instruction_files_json<<EOF"
+            file.puts JSON.generate(normalized[:instruction_files])
             file.puts "EOF"
             file.puts "repo_ignored_paths_json<<EOF"
             file.puts JSON.generate(normalized[:ignored_paths])
@@ -295,6 +300,7 @@ jobs:
           AI_REVIEW_ARTIFACT_DIR: ${{ runner.temp }}/ai-review-${{ github.run_id }}
           AI_REVIEW_REPO_CONFIG_JSON: ${{ steps.load_repo_ai_review_config.outputs.repo_config_json }}
           AI_REVIEW_REPO_REVIEWER_NOTES: ${{ steps.load_repo_ai_review_config.outputs.repo_reviewer_notes }}
+          AI_REVIEW_REPO_INSTRUCTION_FILES_JSON: ${{ steps.load_repo_ai_review_config.outputs.repo_instruction_files_json }}
           AI_REVIEW_REPO_IGNORED_PATHS_JSON: ${{ steps.load_repo_ai_review_config.outputs.repo_ignored_paths_json }}
           AI_REVIEW_REPO_HIGH_PRIORITY_PATHS_JSON: ${{ steps.load_repo_ai_review_config.outputs.repo_high_priority_paths_json }}
           AI_REVIEW_REPO_PROMPT_FRAGMENTS_JSON: ${{ steps.load_repo_ai_review_config.outputs.repo_prompt_fragments_json }}

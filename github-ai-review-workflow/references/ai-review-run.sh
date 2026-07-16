@@ -13,6 +13,7 @@ set -euo pipefail
 provider="${PROVIDER:-claude}"
 provider_timeout_seconds="${AI_REVIEW_TIMEOUT_SECONDS:-900}"
 repo_review_prompt_context="${AI_REVIEW_REPO_PROMPT_CONTEXT:-}"
+repo_instruction_files_json="${AI_REVIEW_REPO_INSTRUCTION_FILES_JSON:-[]}"
 review_model_requested="${AI_REVIEW_MODEL:-}"
 review_model_requested_source="AI_REVIEW_MODEL"
 if [[ "${provider}" == "claude" && -n "${AI_REVIEW_CLAUDE_MODEL:-}" ]]; then
@@ -123,6 +124,42 @@ append_file_excerpt() {
       printf '\n[truncated after %s lines]\n' "${max_lines}"
     fi
   } >> "${context_bundle_file}"
+}
+
+append_repository_instruction_files() {
+  local instruction_files
+  local instruction_path
+
+  instruction_files="$(
+    node -e '
+      try {
+        const values = JSON.parse(process.argv[1] || "[]");
+        if (Array.isArray(values)) {
+          for (const value of values) {
+            if (typeof value === "string" && value.trim()) console.log(value.trim());
+          }
+        }
+      } catch {
+        process.exit(1);
+      }
+    ' "${repo_instruction_files_json}" 2>/dev/null || true
+  )"
+
+  while IFS= read -r instruction_path; do
+    [[ -z "${instruction_path}" ]] && continue
+    if [[ "${instruction_path}" == /* || "${instruction_path}" == ../* || "${instruction_path}" == */../* || "${instruction_path}" == *"/.." ]]; then
+      printf '\n## Repository Guidance\nSkipped unsafe configured instruction path: %s\n' "${instruction_path}" >> "${context_bundle_file}"
+      continue
+    fi
+
+    local instruction_file="${workspace}/${instruction_path}"
+    if [[ -L "${instruction_file}" ]]; then
+      printf '\n## Repository Guidance\nSkipped symlinked configured instruction file: %s\n' "${instruction_path}" >> "${context_bundle_file}"
+      continue
+    fi
+
+    append_file_excerpt "Repository Guidance" "${instruction_file}" 220
+  done <<< "${instruction_files}"
 }
 
 is_large_generated_context_file() {
@@ -665,7 +702,8 @@ build_context_bundle() {
     printf 'PR classification: %s\n' "${pr_classification}"
   } > "${context_bundle_file}"
 
-  append_file_excerpt "Repository Guidance" "${workspace}/CLAUDE.md" 140
+append_file_excerpt "Repository Guidance" "${workspace}/CLAUDE.md" 140
+append_repository_instruction_files
 
   {
     printf '\n## Changed Files\n\n'
@@ -837,6 +875,7 @@ run_self_test() {
   local previous_local_diff_available="${local_diff_available}"
   local previous_changed_files="${CHANGED_FILES_LIST}"
   local previous_context_bundle_file="${context_bundle_file}"
+  local previous_instruction_files_json="${repo_instruction_files_json}"
 
   workspace="${temp_repo}"
   base_sha="${test_base_sha}"
@@ -862,6 +901,18 @@ run_self_test() {
     failures=$((failures + 1))
   fi
 
+  mkdir -p "${temp_repo}/.claude/agents"
+  printf 'Use the custom reviewer guardrails.\n' > "${temp_repo}/.claude/agents/review-guardrails.md"
+  : > "${context_bundle_file}"
+  repo_instruction_files_json='[".claude/agents/review-guardrails.md", "../unsafe.md"]'
+  append_repository_instruction_files
+  if grep -q 'Use the custom reviewer guardrails.' "${context_bundle_file}" && grep -q 'Skipped unsafe configured instruction path' "${context_bundle_file}"; then
+    printf 'PASS configured instruction file handling\n'
+  else
+    printf 'FAIL configured instruction file handling\n' >&2
+    failures=$((failures + 1))
+  fi
+
   rm -f "${context_bundle_file}"
   context_bundle_file="${previous_context_bundle_file}"
   workspace="${previous_workspace}"
@@ -869,6 +920,7 @@ run_self_test() {
   checked_out_sha="${previous_checked_out_sha}"
   local_diff_available="${previous_local_diff_available}"
   CHANGED_FILES_LIST="${previous_changed_files}"
+  repo_instruction_files_json="${previous_instruction_files_json}"
 
   local payload_file
   payload_file="$(mktemp_workfile)"
