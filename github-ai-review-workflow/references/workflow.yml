@@ -1,3 +1,6 @@
+# SOURCE OF TRUTH: houseworksinc/skills/github-ai-review-workflow
+# Sync this workflow from the source repository. Do not make local workflow changes;
+# repositories may add only custom reviewer-skill configuration in .github/ai-review/config.yml.
 name: AI Review
 
 on:

@@ -19,6 +19,11 @@ Reusable control plane for comment-triggered AI PR review.
 
 ## How to use it
 
+> **Source-of-truth rule:** This directory is the canonical source for the AI-review
+> workflow and runner contract. After installation, sync workflow changes from here;
+> do not modify a repository's copied workflow or runner implementation locally.
+> Repository-specific custom reviewer skills belong in `.github/ai-review/config.yml`.
+
 1. Copy the workflow template from [references/workflow.yml](references/workflow.yml) into the target repo at `.github/workflows/ai-review.yml`.
 2. Add a repo-local executable that satisfies [references/runner-contract.md](references/runner-contract.md) at `.github/scripts/ai-review-run.mjs`.
 3. Add an optional repo override file from [references/repo-overrides.example.yml](references/repo-overrides.example.yml) at `.github/ai-review/config.yml`.
