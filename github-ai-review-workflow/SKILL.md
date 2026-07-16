@@ -26,9 +26,10 @@ Reusable control plane for comment-triggered AI PR review.
 
 1. Copy the workflow template from [references/workflow.yml](references/workflow.yml) into the target repo at `.github/workflows/ai-review.yml`.
 2. Copy [references/ai-review-run.mjs](references/ai-review-run.mjs) and [references/ai-review-run.sh](references/ai-review-run.sh) into `.github/scripts/`.
-3. Add an optional repo override file from [references/repo-overrides.example.yml](references/repo-overrides.example.yml) at `.github/ai-review/config.yml`.
-4. Configure the required variables and secrets listed in [references/dependencies.md](references/dependencies.md).
-5. Do not alter the copied workflow or runner files locally. Add only repository-specific reviewer guidance in `.github/ai-review/config.yml`.
+3. Copy [references/ai-review.md](references/ai-review.md) into the target repo at `docs/ai-review.md`.
+4. Add an optional repo override file from [references/repo-overrides.example.yml](references/repo-overrides.example.yml) at `.github/ai-review/config.yml`.
+5. Configure the required variables and secrets listed in [references/dependencies.md](references/dependencies.md).
+6. Do not alter the copied workflow, runners, or AI-review documentation locally. Add only repository-specific reviewer guidance in `.github/ai-review/config.yml`.
 
 ## Reusable structure
 
@@ -46,6 +47,7 @@ That separation is what makes the workflow independently applyable across repos.
 - [Workflow template](references/workflow.yml)
 - [Canonical MJS runner wrapper](references/ai-review-run.mjs)
 - [Canonical shell runner](references/ai-review-run.sh)
+- [AI-review documentation template](references/ai-review.md)
 - [Runner contract](references/runner-contract.md)
 - [Repo overrides example](references/repo-overrides.example.yml)
 - [Dependencies and config](references/dependencies.md)

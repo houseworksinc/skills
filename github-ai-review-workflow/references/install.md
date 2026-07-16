@@ -7,6 +7,7 @@ Use this when porting the workflow into a new repository.
 - `.github/workflows/ai-review.yml`
 - `.github/scripts/ai-review-run.mjs`
 - `.github/scripts/ai-review-run.sh`
+- `docs/ai-review.md`
 - `.github/ai-review/config.yml` if the repo wants overrides
 
 ## Repo configuration
