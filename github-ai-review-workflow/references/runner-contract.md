@@ -1,6 +1,6 @@
 # Runner Contract
 
-The workflow expects a repo-checked-in executable at `.github/scripts/ai-review-run.mjs`.
+The workflow expects the canonical repo-checked-in pair at `.github/scripts/ai-review-run.mjs` and `.github/scripts/ai-review-run.sh`. The MJS wrapper invokes the shell runner.
 
 The workflow also loads `.github/ai-review/config.yml` when present and exposes the normalized
 override data to the script through environment variables.
