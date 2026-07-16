@@ -4,13 +4,13 @@ on:
   pull_request:
     paths:
       - "github-ai-review-workflow/**"
-      - "actionlint.yaml"
+      - ".github/actionlint.yaml"
       - ".github/workflows/validate-github-ai-review-workflow.yml"
   push:
     branches: [main]
     paths:
       - "github-ai-review-workflow/**"
-      - "actionlint.yaml"
+      - ".github/actionlint.yaml"
       - ".github/workflows/validate-github-ai-review-workflow.yml"
 
 permissions:
