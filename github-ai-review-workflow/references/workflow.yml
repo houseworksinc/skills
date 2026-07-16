@@ -51,6 +51,24 @@ jobs:
                 ? "codex"
                 : "claude";
 
+            const skipReview = async (reason) => {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body: [
+                  "AI review not started.",
+                  "",
+                  `Reason: ${reason}`,
+                  "",
+                  "Start a new review when the pull request is open, ready for review, and uses a branch in this repository.",
+                ].join("\n"),
+              });
+              core.setOutput("eligible", "no");
+              core.setOutput("skip_reason", reason);
+              core.notice(`AI review skipped: ${reason}`);
+            };
+
             let permissionLevel;
             try {
               const { data: permissionData } =
@@ -85,18 +103,18 @@ jobs:
             });
 
             if (pr.state !== "open") {
-              core.setFailed(`PR #${issueNumber} is not open.`);
+              await skipReview(`PR #${issueNumber} is not open.`);
               return;
             }
 
             if (pr.draft) {
-              core.setFailed(`PR #${issueNumber} is a draft.`);
+              await skipReview(`PR #${issueNumber} is a draft.`);
               return;
             }
 
             const headRepoFullName = pr.head.repo?.full_name || "";
             if (headRepoFullName !== `${owner}/${repo}`) {
-              core.setFailed(
+              await skipReview(
                 `PR #${issueNumber} is from a fork (${headRepoFullName}); AI review of fork PRs is disabled.`
               );
               return;
@@ -139,6 +157,7 @@ jobs:
             }
 
             core.setOutput("permission_level", permissionLevel);
+            core.setOutput("eligible", "yes");
             core.setOutput("provider", provider);
             core.setOutput("label_added", labelAdded ? "yes" : "no");
             core.setOutput("pr_number", issueNumber.toString());
@@ -179,6 +198,7 @@ jobs:
             );
 
       - name: Checkout PR head
+        if: steps.resolve.outputs.eligible == 'yes'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: ${{ steps.resolve.outputs.head_repo }}
@@ -186,6 +206,7 @@ jobs:
           fetch-depth: 0
 
       - name: Validate local AI review runner
+        if: steps.resolve.outputs.eligible == 'yes'
         run: |
           if ! command -v node >/dev/null 2>&1; then
             echo "node is required to execute .github/scripts/ai-review-run.mjs" >&2
@@ -194,6 +215,7 @@ jobs:
 
       - name: Load repo AI review overrides
         id: load_repo_ai_review_config
+        if: steps.resolve.outputs.eligible == 'yes'
         run: |
           ruby <<'RUBY'
           require "json"
@@ -275,6 +297,7 @@ jobs:
 
       - name: Run local AI review
         id: stub
+        if: steps.resolve.outputs.eligible == 'yes'
         timeout-minutes: 20
         env:
           PROVIDER: ${{ steps.resolve.outputs.provider }}
@@ -312,6 +335,7 @@ jobs:
           node .github/scripts/ai-review-run.mjs >> "$GITHUB_OUTPUT"
 
       - name: Post AI review comment
+        if: steps.resolve.outputs.eligible == 'yes'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           PR_NUMBER: ${{ steps.resolve.outputs.pr_number }}
@@ -598,7 +622,7 @@ jobs:
 
       - name: Upload AI review artifacts
         continue-on-error: true
-        if: always()
+        if: ${{ always() && steps.resolve.outputs.eligible == 'yes' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ai-review-${{ steps.resolve.outputs.pr_number }}-${{ github.run_id }}
@@ -607,7 +631,7 @@ jobs:
           retention-days: 14
 
       - name: Notify Slack on failure
-        if: failure()
+        if: ${{ failure() && steps.resolve.outputs.eligible == 'yes' }}
         continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:

@@ -31,10 +31,12 @@ Claude is the default provider. Codex can be selected manually:
 
 The workflow adds the `ai-review` label the first time it is invoked.
 
+If the PR is closed, still a draft, or comes from a fork, the workflow posts an `AI review not started` comment with the reason and completes successfully without running the reviewer.
+
 ## End-To-End Flow
 
 1. GitHub receives an `issue_comment` event on a PR.
-2. The workflow validates the command, commenter permission, PR state, and provider.
+2. The workflow validates the command, commenter permission, PR state, and provider. Ineligible PRs receive a clean no-op comment and skip the remaining steps.
 3. The workflow adds the `ai-review` label if missing.
 4. The workflow collects PR metadata, changed files, base SHA, and head SHA.
 5. The self-hosted macOS runner checks out the PR head with full history.
