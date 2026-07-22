@@ -7,6 +7,11 @@
 reviewer_notes: |
   Focus on scheduling invariants, state transitions, and hidden data ownership changes.
 
+# Optional repository-local reviewer skill documents to include in the prompt.
+# Paths must be relative to the repository root. Symlinks and unsafe paths are ignored.
+instruction_files:
+  - .claude/agents/review-guardrails.md
+
 # Files or globs the repo wants the reviewer to ignore or down-rank.
 ignored_paths:
   - docs/**
