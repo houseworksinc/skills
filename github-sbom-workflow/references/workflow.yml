@@ -35,7 +35,10 @@ jobs:
     name: supply-chain-policy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      # Actions are pinned to commit SHAs rather than mutable major tags; this template is copied
+      # into product repositories (recon targets), so SHAs are the stricter and more consistent
+      # choice. Bump by updating the SHA and the trailing comment in lockstep.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Verify repository configuration
         id: config
@@ -73,7 +76,7 @@ jobs:
       - name: Scan candidate SBOM with OSV
         id: osv
         continue-on-error: true
-        uses: google/osv-scanner/actions/osv-scanner@v2
+        uses: google/osv-scanner/actions/osv-scanner@459ca69939984dc05f15b77720aa81c672aeb5cc # v2
         with:
           scan-args: --sbom=sbom.cdx.json --format=json --output=osv-findings.json
 
@@ -95,7 +98,7 @@ jobs:
 
       - name: Upload PR evidence
         if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: sbom-${{ github.event.pull_request.number }}-${{ github.sha }}
           path: |
@@ -107,7 +110,7 @@ jobs:
 
       - name: Configure AWS credentials for release evidence
         if: github.ref_type == 'tag'
-        uses: aws-actions/configure-aws-credentials@v5
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
         with:
           role-to-assume: ${{ vars.SBOM_AWS_ROLE_ARN }}
           aws-region: ${{ vars.SBOM_AWS_REGION }}
