@@ -205,6 +205,23 @@ jobs:
           ref: ${{ steps.resolve.outputs.head_sha }}
           fetch-depth: 0
 
+      - name: Prepare AI review scratch directory
+        if: steps.resolve.outputs.eligible == 'yes'
+        env:
+          AI_REVIEW_SCRATCH_DIR: ${{ runner.temp }}/ai-review-work-${{ github.run_id }}
+        run: |
+          if [[ "${AI_REVIEW_SCRATCH_DIR}" != "${RUNNER_TEMP}"/ai-review-work-* ]]; then
+            echo "Refusing unsafe AI review scratch path: ${AI_REVIEW_SCRATCH_DIR}" >&2
+            exit 1
+          fi
+          if [[ -e "${AI_REVIEW_SCRATCH_DIR}" && ! -O "${AI_REVIEW_SCRATCH_DIR}" ]]; then
+            echo "AI review scratch path is not owned by the runner user: ${AI_REVIEW_SCRATCH_DIR}" >&2
+            exit 1
+          fi
+          rm -rf -- "${AI_REVIEW_SCRATCH_DIR}"
+          mkdir -p "${AI_REVIEW_SCRATCH_DIR}"
+          chmod 700 "${AI_REVIEW_SCRATCH_DIR}"
+
       - name: Validate local AI review runner
         if: steps.resolve.outputs.eligible == 'yes'
         run: |
@@ -320,6 +337,7 @@ jobs:
           PR_AUTHOR: ${{ steps.resolve.outputs.pr_author }}
           COMMENTER: ${{ steps.resolve.outputs.commenter }}
           REVIEW_WORKSPACE: ${{ github.workspace }}
+          AI_REVIEW_SCRATCH_DIR: ${{ runner.temp }}/ai-review-work-${{ github.run_id }}
           AI_REVIEW_ARTIFACT_DIR: ${{ runner.temp }}/ai-review-${{ github.run_id }}
           AI_REVIEW_REPO_CONFIG_JSON: ${{ steps.load_repo_ai_review_config.outputs.repo_config_json }}
           AI_REVIEW_REPO_REVIEWER_NOTES: ${{ steps.load_repo_ai_review_config.outputs.repo_reviewer_notes }}
@@ -371,6 +389,7 @@ jobs:
           TOOL_READY: ${{ steps.stub.outputs.tool_ready }}
           TOOL_VERSION: ${{ steps.stub.outputs.tool_version }}
           TOOL_ERROR: ${{ steps.stub.outputs.tool_error }}
+          REVIEW_STATUS: ${{ steps.stub.outputs.review_status }}
           REVIEW_PAYLOAD: ${{ steps.stub.outputs.review_payload }}
           REVIEW_COMMENT_BODY: ${{ steps.stub.outputs.review_comment_body }}
         with:
@@ -471,6 +490,7 @@ jobs:
 
             const review = parseReviewPayload(process.env.REVIEW_PAYLOAD);
             const findings = Array.isArray(review.findings) ? review.findings : [];
+            const reviewFailed = process.env.REVIEW_STATUS !== "success";
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -535,7 +555,11 @@ jobs:
               ? review.handoff_notes.slice(0, 6).map((note) => `- ${note}`)
               : ["_No handoff notes._"];
             const summaryFindingLines = formatSummaryFindings(summaryFindings);
-            const noFindingsLine = findings.length === 0 ? "Review completed successfully. No Findings." : null;
+            const noFindingsLine = reviewFailed
+              ? "AI review failed. No review findings were produced."
+              : findings.length === 0
+                ? "Review completed successfully. No Findings."
+                : null;
             const bodyLines = [
               "AI review command accepted.",
               noFindingsLine,
@@ -629,6 +653,27 @@ jobs:
           path: ${{ runner.temp }}/ai-review-${{ github.run_id }}
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Remove AI review scratch directory
+        if: ${{ always() && steps.resolve.outputs.eligible == 'yes' }}
+        env:
+          AI_REVIEW_SCRATCH_DIR: ${{ runner.temp }}/ai-review-work-${{ github.run_id }}
+        run: |
+          if [[ "${AI_REVIEW_SCRATCH_DIR}" != "${RUNNER_TEMP}"/ai-review-work-* ]]; then
+            echo "Refusing unsafe AI review scratch path: ${AI_REVIEW_SCRATCH_DIR}" >&2
+            exit 1
+          fi
+          if [[ -e "${AI_REVIEW_SCRATCH_DIR}" && ! -O "${AI_REVIEW_SCRATCH_DIR}" ]]; then
+            echo "AI review scratch path is not owned by the runner user: ${AI_REVIEW_SCRATCH_DIR}" >&2
+            exit 1
+          fi
+          rm -rf -- "${AI_REVIEW_SCRATCH_DIR}"
+
+      - name: Fail AI review when provider failed
+        if: ${{ steps.resolve.outputs.eligible == 'yes' && steps.stub.outputs.review_status != 'success' }}
+        run: |
+          echo "AI review provider failed: ${{ steps.stub.outputs.tool_error || 'review output was missing or invalid' }}" >&2
+          exit 1
 
       - name: Notify Slack on failure
         if: ${{ failure() && steps.resolve.outputs.eligible == 'yes' }}
