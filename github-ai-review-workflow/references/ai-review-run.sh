@@ -9,6 +9,7 @@
 # - AI_REVIEW_MODEL as a legacy fallback for both providers
 
 set -euo pipefail
+umask 077
 
 provider="${PROVIDER:-claude}"
 provider_timeout_seconds="${AI_REVIEW_TIMEOUT_SECONDS:-900}"
@@ -60,13 +61,23 @@ tool_path=""
 tool_ready="no"
 tool_version=""
 tool_error=""
+review_status="failure"
 review_payload=""
 review_comment_body=""
 context_bundle=""
 context_bundle_line_count="0"
 local_diff_available="no"
 provider_timed_out="no"
-work_tmp_dir="$(mktemp -d)"
+scratch_dir="${AI_REVIEW_SCRATCH_DIR:-}"
+if [[ -n "${scratch_dir}" ]]; then
+  if [[ ! -d "${scratch_dir}" || ! -O "${scratch_dir}" || -L "${scratch_dir}" ]]; then
+    printf 'AI review scratch directory is missing, unsafe, or not owned by the runner user: %s\n' "${scratch_dir}" >&2
+    exit 1
+  fi
+  work_tmp_dir="$(mktemp -d "${scratch_dir}/runner.XXXXXX")"
+else
+  work_tmp_dir="$(mktemp -d)"
+fi
 
 prompt_file=""
 output_file=""
@@ -433,8 +444,9 @@ run_with_timeout() {
   local child_status
   timeout_marker="$(mktemp_workfile)"
 
-  "$@" &
-  local child_pid=$!
+  local child_pid
+  start_in_process_group "$@"
+  child_pid="${started_child_pid}"
 
   run_timeout_watcher "${timeout_seconds}" "${child_pid}" "${timeout_marker}" &
   local watcher_pid=$!
@@ -464,8 +476,9 @@ run_with_timeout_from_file() {
   local child_status
   timeout_marker="$(mktemp_workfile)"
 
-  "$@" < "${stdin_file}" &
-  local child_pid=$!
+  local child_pid
+  start_in_process_group "$@" < "${stdin_file}"
+  child_pid="${started_child_pid}"
 
   run_timeout_watcher "${timeout_seconds}" "${child_pid}" "${timeout_marker}" &
   local watcher_pid=$!
@@ -495,10 +508,19 @@ run_timeout_watcher() {
   sleep "${timeout_seconds}"
   if kill -0 "${child_pid}" 2>/dev/null; then
     printf 'timeout\n' > "${timeout_marker}"
-    terminate_process_tree "${child_pid}" TERM
+    terminate_process_group "${child_pid}" TERM
     sleep 10
-    terminate_process_tree "${child_pid}" KILL
+    terminate_process_group "${child_pid}" KILL
   fi
+}
+
+started_child_pid=""
+
+start_in_process_group() {
+  set -m
+  "$@" &
+  started_child_pid=$!
+  set +m
 }
 
 terminate_process_tree() {
@@ -511,6 +533,21 @@ terminate_process_tree() {
   done < <(pgrep -P "${pid}" 2>/dev/null || true)
 
   kill "-${signal}" "${pid}" 2>/dev/null || true
+}
+
+terminate_process_group() {
+  local pid="$1"
+  local signal="$2"
+  local script_group
+  local child_group
+
+  script_group="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ' || true)"
+  child_group="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d ' ' || true)"
+
+  if [[ -n "${child_group}" && "${child_group}" != "${script_group}" ]]; then
+    kill "-${signal}" "-${child_group}" 2>/dev/null || true
+  fi
+  terminate_process_tree "${pid}" "${signal}"
 }
 
 read_codex_config_model() {
@@ -1077,7 +1114,9 @@ const structuredFindingCount = Array.isArray(parsedReview?.findings)
 
 const body = [
   "AI review command accepted.",
-  structuredFindingCount === "0"
+  process.env.REVIEW_STATUS !== "success"
+    ? "AI review failed. No review findings were produced."
+    : structuredFindingCount === "0"
     ? "Review completed successfully. No Findings."
     : "Review completed successfully.",
   "",
@@ -1342,11 +1381,27 @@ run_claude() {
     claude_args+=(--model "${review_model_requested}")
   fi
 
-  if (
-    cd "${workspace}" && \
-    run_with_timeout_from_file "${provider_timeout_seconds}" "${prompt_file}" \
-      "${claude_args[@]}"
-  ) > "${output_file}" 2>&1; then
+  # NOTE: do not wrap this in a `( ... )` subshell. start_in_process_group
+  # uses `set -m` so the timeout watcher can kill the whole process group;
+  # job control does not propagate stdin to a backgrounded child started
+  # inside a subshell, so claude would see an empty stdin and fail with
+  # "Input must be provided either through stdin or as a prompt argument".
+  if ! pushd "${workspace}" >/dev/null; then
+    tool_ready="no"
+    tool_error="failed to change to workspace directory: ${workspace}"
+    return
+  fi
+
+  local claude_run_status
+  if run_with_timeout_from_file "${provider_timeout_seconds}" "${prompt_file}" \
+    "${claude_args[@]}" > "${output_file}" 2>&1; then
+    claude_run_status=0
+  else
+    claude_run_status=$?
+  fi
+  popd >/dev/null
+
+  if [[ "${claude_run_status}" -eq 0 ]]; then
     if claude_reported_error "${output_file}"; then
       tool_ready="no"
       tool_error="$(compact_claude_error "${output_file}" "claude returned an error result")"
@@ -1357,9 +1412,8 @@ run_claude() {
     capture_claude_usage "${output_file}"
     capture_review_payload "${output_file}"
   else
-    local status=$?
     tool_ready="no"
-    if [[ "${status}" -eq 124 ]]; then
+    if [[ "${claude_run_status}" -eq 124 ]]; then
       provider_timed_out="yes"
       tool_error="claude timed out after ${provider_timeout_seconds}s"
     else
@@ -1380,6 +1434,10 @@ case "${provider}" in
     ;;
 esac
 
+if [[ -z "${tool_error}" && -n "${review_payload//[[:space:]]/}" ]]; then
+  review_status="success"
+fi
+
 review_duration_seconds="$(( $(date +%s) - review_started_at ))"
 render_review_comment_body
 write_artifacts
@@ -1397,6 +1455,7 @@ write_artifacts
   emit_output "tool_ready" "${tool_ready}"
   emit_output "tool_version" "${tool_version}"
   emit_output "tool_error" "${tool_error}"
+  emit_output "review_status" "${review_status}"
   emit_output "review_model_reported" "${review_model_reported}"
   emit_output "review_model_source" "${review_model_source}"
   emit_output "review_input_tokens" "${review_input_tokens}"
