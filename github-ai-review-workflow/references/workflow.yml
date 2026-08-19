@@ -222,6 +222,17 @@ jobs:
           mkdir -p "${AI_REVIEW_SCRATCH_DIR}"
           chmod 700 "${AI_REVIEW_SCRATCH_DIR}"
 
+      - name: Set up Node.js
+        if: steps.resolve.outputs.eligible == 'yes'
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: "22.x"
+          # No npm/yarn cache here: this workflow never runs npm/yarn install,
+          # so there is nothing for that cache to speed up. The relevant cache
+          # is setup-node's own tool-cache, which self-hosted runners persist
+          # across jobs automatically — the Node download only happens once
+          # per runner host, not once per /ai-review invocation.
+
       - name: Validate local AI review runner
         if: steps.resolve.outputs.eligible == 'yes'
         run: |
