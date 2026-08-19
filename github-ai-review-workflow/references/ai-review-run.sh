@@ -1381,11 +1381,27 @@ run_claude() {
     claude_args+=(--model "${review_model_requested}")
   fi
 
-  if (
-    cd "${workspace}" && \
-    run_with_timeout_from_file "${provider_timeout_seconds}" "${prompt_file}" \
-      "${claude_args[@]}"
-  ) > "${output_file}" 2>&1; then
+  # NOTE: do not wrap this in a `( ... )` subshell. start_in_process_group
+  # uses `set -m` so the timeout watcher can kill the whole process group;
+  # job control does not propagate stdin to a backgrounded child started
+  # inside a subshell, so claude would see an empty stdin and fail with
+  # "Input must be provided either through stdin or as a prompt argument".
+  if ! pushd "${workspace}" >/dev/null; then
+    tool_ready="no"
+    tool_error="failed to change to workspace directory: ${workspace}"
+    return
+  fi
+
+  local claude_run_status
+  if run_with_timeout_from_file "${provider_timeout_seconds}" "${prompt_file}" \
+    "${claude_args[@]}" > "${output_file}" 2>&1; then
+    claude_run_status=0
+  else
+    claude_run_status=$?
+  fi
+  popd >/dev/null
+
+  if [[ "${claude_run_status}" -eq 0 ]]; then
     if claude_reported_error "${output_file}"; then
       tool_ready="no"
       tool_error="$(compact_claude_error "${output_file}" "claude returned an error result")"
@@ -1396,9 +1412,8 @@ run_claude() {
     capture_claude_usage "${output_file}"
     capture_review_payload "${output_file}"
   else
-    local status=$?
     tool_ready="no"
-    if [[ "${status}" -eq 124 ]]; then
+    if [[ "${claude_run_status}" -eq 124 ]]; then
       provider_timed_out="yes"
       tool_error="claude timed out after ${provider_timeout_seconds}s"
     else
