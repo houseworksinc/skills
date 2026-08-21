@@ -241,6 +241,18 @@ jobs:
             exit 1
           fi
 
+      - name: Set up Ruby
+        if: steps.resolve.outputs.eligible == 'yes'
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          ruby-version: "3.3"
+          # No bundler-cache here: this step only uses Ruby's stdlib
+          # (json, yaml) to parse .github/ai-review/config.yml — there is
+          # no Gemfile and nothing to `bundle install`. The Ruby install
+          # itself is cached automatically in the runner's tool cache,
+          # which self-hosted runners persist across jobs, so the
+          # download only happens once per runner host.
+
       - name: Load repo AI review overrides
         id: load_repo_ai_review_config
         if: steps.resolve.outputs.eligible == 'yes'
