@@ -17,7 +17,7 @@ jobs:
     if: >
       github.event.issue.pull_request &&
       startsWith(github.event.comment.body, '/ai-review')
-    runs-on: [self-hosted, mumbai-office]
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '["ubuntu-latest"]') }}
     permissions:
       contents: read
       issues: write

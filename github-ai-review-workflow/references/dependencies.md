@@ -35,5 +35,5 @@ If either Slack secret is missing, the workflow should skip the notification rat
 ## Runner contract
 
 - The workflow assumes a self-hosted runner pool.
-- Update the `runs-on` label list when applying to another repo.
+- Set the `CI_RUNNER` Actions variable on the repo to the label list (for example `["self-hosted","b450-ephemeral"]`); without it the job falls back to `ubuntu-latest`, where the review CLI is not installed. Flip the variable to `["ubuntu-latest"]` when the self-hosted pool is down. There is no native `runs-on` failover.
 - The runner must have `node` available so it can execute the checked-in script.
