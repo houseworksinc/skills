@@ -82,9 +82,12 @@ jobs:
       - name: Scan candidate SBOM with OSV
         id: osv
         continue-on-error: true
-        uses: google/osv-scanner/actions/osv-scanner@459ca69939984dc05f15b77720aa81c672aeb5cc # v2
-        with:
-          scan-args: --sbom=sbom.cdx.json --format=json --output=osv-findings.json
+        run: |
+          scanner_user="$(id -u):$(id -g)"
+          case "$(docker info --format '{{json .SecurityOptions}}')" in *rootless*) scanner_user=0:0 ;; esac
+          docker run --rm --user "$scanner_user" -v "$PWD:/workspace" -w /workspace \
+            ghcr.io/google/osv-scanner@sha256:bf249317dcf838cf9e47f370cfd4dd4178d875bba14e3ce74d299c5bf1b129a1 \
+            scan source --sbom=sbom.cdx.json --format=json --output=osv-findings.json
 
       - name: Preserve scan execution result
         env:
