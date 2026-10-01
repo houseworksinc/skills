@@ -2,8 +2,8 @@
 name: github-sbom-workflow
 description: >
   Installs the HouseWorks reusable GitHub Actions SBOM workflow. Use when a repository needs
-  CycloneDX evidence, dependency-change PR checks, durable S3 retention, and ClickHouse/Metabase
-  inventory reporting without a paid SCA platform.
+  CycloneDX evidence, dependency-change PR checks, durable S3 retention, and Dependency-Track
+  inventory/triage without a paid SCA platform.
 ---
 
 # GitHub SBOM Workflow
@@ -26,9 +26,13 @@ Reusable supply-chain control plane for HouseWorks repositories.
    `.github/sbom/config.yml` and set the proposed catalog identifiers.
 3. Add an executable `.github/scripts/generate-sbom.sh` implementing the
    [generator contract](references/generator-contract.md). It must produce
-   `sbom.cdx.json` for the built release artifact or image.
-4. Configure the GitHub variables and OIDC role described in [references/dependencies.md].
-5. Start with `enforcement: report`; change it to `required` only after the pilot is accepted.
+   `sbom.cdx.json` for the built release artifact or image and the matching
+   `.github/sbom/artifact-digest` file.
+4. Copy `validate-sbom.py` and `prepare-sbom-evidence.py` to `.github/scripts/`, copy
+   `publish-sbom-evidence.sh` there as an executable, and copy the entire `schema/` directory
+   (including its license) to `.github/sbom/schema/`.
+5. Configure the GitHub variables and OIDC role described in [dependencies](references/dependencies.md).
+6. Start with `enforcement: report`; change it to `required` only after the pilot is accepted.
 
 ## Lifecycle
 
@@ -36,9 +40,10 @@ Reusable supply-chain control plane for HouseWorks repositories.
   publish short-lived reviewer evidence. No PR is uploaded to the central inventory.
 - **Release tag:** generate the authoritative BOM from the release artifact, scan it, and publish
   the BOM, checksum, metadata, and machine-readable OSV result to S3.
-- **Scheduled organization inventory:** a central normalizer imports S3 evidence into ClickHouse;
-  Metabase provides reporting and triage. Application workflows never receive ClickHouse
-  credentials.
+- **Scheduled organization inventory:** the central worker validates S3 evidence and imports
+  every committed release into Dependency-Track. PostgreSQL retains analysis history; Linear
+  owns remediation and exceptions. ClickHouse/Metabase are optional reporting. Application
+  workflows receive no central API or database credentials.
 
 The canonical policy and repository classifications live in
 `common-houseworks-ops`, not in each product repository.
