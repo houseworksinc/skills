@@ -19,7 +19,7 @@ on:
       - '**/Dockerfile*'
       - '**/.terraform.lock.hcl'
       - '.github/sbom/**'
-      - '.github/scripts/generate-sbom.sh'
+      - '.github/scripts/*sbom*'
       - '.github/workflows/sbom.yml'
   push:
     tags: ['v*']
@@ -28,12 +28,18 @@ on:
 permissions:
   contents: read
   actions: read
-  id-token: write
+
+concurrency:
+  group: sbom-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   supply-chain-policy:
     name: supply-chain-policy
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     steps:
       # Actions are pinned to commit SHAs rather than mutable major tags; this template is copied
       # into product repositories (recon targets), so SHAs are the stricter and more consistent
@@ -55,30 +61,33 @@ jobs:
       - name: Generate CycloneDX SBOM
         run: .github/scripts/generate-sbom.sh
 
+      - name: Validate CycloneDX against the pinned offline schema
+        run: |
+          python3 -m venv "$RUNNER_TEMP/sbom-validator"
+          "$RUNNER_TEMP/sbom-validator/bin/pip" install 'jsonschema[format]==4.25.1'
+          "$RUNNER_TEMP/sbom-validator/bin/python" .github/scripts/validate-sbom.py sbom.cdx.json .github/sbom/schema
+
       - name: Validate BOM and make evidence manifest
         id: evidence
         env:
           RELEASE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
         run: |
           set -euo pipefail
-          jq -e '.bomFormat == "CycloneDX" and .specVersion and .metadata.component' sbom.cdx.json >/dev/null
-          sha256sum sbom.cdx.json | awk '{print $1}' > sbom.cdx.json.sha256
-          jq -n \
-            --arg repository "$GITHUB_REPOSITORY" \
-            --arg revision "$GITHUB_SHA" \
-            --arg version "$RELEASE_VERSION" \
-            --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --arg sbom_sha256 "$(cat sbom.cdx.json.sha256)" \
-            '{repository:$repository, revision:$revision, version:$version, generated_at:$generated_at, format:"CycloneDX JSON", sbom_sha256:$sbom_sha256}' \
-            > metadata.json
+          export VERSION="$RELEASE_VERSION"
+          export ARTIFACT_DIGEST="$(cat .github/sbom/artifact-digest)"
+          python3 .github/scripts/prepare-sbom-evidence.py
+          "$RUNNER_TEMP/sbom-validator/bin/python" .github/scripts/validate-sbom.py sbom.cdx.json .github/sbom/schema
           echo "release_version=$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Scan candidate SBOM with OSV
         id: osv
         continue-on-error: true
-        uses: google/osv-scanner/actions/osv-scanner@459ca69939984dc05f15b77720aa81c672aeb5cc # v2
-        with:
-          scan-args: --sbom=sbom.cdx.json --format=json --output=osv-findings.json
+        run: |
+          scanner_user="$(id -u):$(id -g)"
+          case "$(docker info --format '{{json .SecurityOptions}}')" in *rootless*) scanner_user=0:0 ;; esac
+          docker run --rm --user "$scanner_user" -v "$PWD:/workspace" -w /workspace \
+            ghcr.io/google/osv-scanner@sha256:bf249317dcf838cf9e47f370cfd4dd4178d875bba14e3ce74d299c5bf1b129a1 \
+            scan source --sbom=sbom.cdx.json --format=json --output=osv-findings.json
 
       - name: Preserve scan execution result
         env:
@@ -89,6 +98,21 @@ jobs:
               '{schema:"houseworks-sbom-scan-result/v1", scanner:"osv-scanner", outcome:$scan_outcome}' \
               > osv-findings.json
           fi
+          jq --arg outcome "$SCAN_OUTCOME" '.scan_outcome=$outcome' metadata.json > metadata.tmp
+          mv metadata.tmp metadata.json
+
+      - name: Upload candidate evidence
+        if: always() && steps.evidence.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sbom-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            sbom.cdx.json
+            sbom.cdx.json.sha256
+            metadata.json
+            osv-findings.json
+          retention-days: 14
+          if-no-files-found: error
 
       - name: Enforce vulnerability policy
         if: steps.config.outputs.enforcement == 'required' && steps.osv.outcome != 'success'
@@ -96,36 +120,36 @@ jobs:
           echo "::error::OSV scan found a blocking issue or could not complete. Resolve it or use an approved, expiring exception."
           exit 1
 
-      - name: Upload PR evidence
-        if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: sbom-${{ github.event.pull_request.number }}-${{ github.sha }}
-          path: |
-            sbom.cdx.json
-            sbom.cdx.json.sha256
-            metadata.json
-            osv-findings.json
-          retention-days: 14
+  publish-release:
+    name: Publish release evidence
+    needs: supply-chain-policy
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Download the evidence generated by this run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVIDENCE_NAME: sbom-${{ github.run_id }}-${{ github.run_attempt }}
+        run: gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$EVIDENCE_NAME"
 
       - name: Configure AWS credentials for release evidence
-        if: github.ref_type == 'tag'
         uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
         with:
           role-to-assume: ${{ vars.SBOM_AWS_ROLE_ARN }}
           aws-region: ${{ vars.SBOM_AWS_REGION }}
 
       - name: Publish immutable release evidence to S3
-        if: github.ref_type == 'tag'
         env:
           BUCKET: ${{ vars.SBOM_S3_BUCKET }}
           PREFIX: ${{ vars.SBOM_S3_PREFIX }}
-          VERSION: ${{ steps.evidence.outputs.release_version }}
+          VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           test -n "$BUCKET"
-          KEY="$PREFIX/$GITHUB_REPOSITORY/releases/$VERSION"
-          aws s3 cp sbom.cdx.json "s3://$BUCKET/$KEY/sbom.cdx.json" --sse aws:kms
-          aws s3 cp sbom.cdx.json.sha256 "s3://$BUCKET/$KEY/sbom.cdx.json.sha256" --sse aws:kms
-          aws s3 cp metadata.json "s3://$BUCKET/$KEY/metadata.json" --sse aws:kms
-          aws s3 cp osv-findings.json "s3://$BUCKET/$KEY/osv-findings.json" --sse aws:kms
+          bash .github/scripts/publish-sbom-evidence.sh

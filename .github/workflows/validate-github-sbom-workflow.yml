@@ -1,0 +1,19 @@
+name: Validate SBOM workflow contract
+on:
+  pull_request:
+    paths: ['github-sbom-workflow/**', '.github/workflows/validate-github-sbom-workflow.yml']
+  push:
+    branches: [main]
+    paths: ['github-sbom-workflow/**', '.github/workflows/validate-github-sbom-workflow.yml']
+permissions:
+  contents: read
+jobs:
+  evidence-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - run: |
+          python3 -m venv /tmp/sbom-contract
+          /tmp/sbom-contract/bin/pip install 'jsonschema[format]==4.25.1' pytest==8.4.2
+          /tmp/sbom-contract/bin/python -m pytest -q github-sbom-workflow/tests
+          bash -n github-sbom-workflow/references/publish-sbom-evidence.sh
