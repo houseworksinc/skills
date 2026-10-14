@@ -37,6 +37,8 @@ runner_name="${RUNNER_NAME:-unknown}"
 runner_os="${RUNNER_OS:-unknown}"
 host="$(hostname)"
 workspace="${REVIEW_WORKSPACE:-$(pwd)}"
+# Prefix for commands that can execute PR code: they must not see provider credentials.
+without_credentials=(env -u ANTHROPIC_API_KEY -u CLAUDE_CODE_OAUTH_TOKEN -u OPENAI_API_KEY)
 checked_out_sha="$(git -C "${workspace}" rev-parse HEAD 2>/dev/null || printf 'unknown')"
 checked_out_branch="$(git -C "${workspace}" rev-parse --abbrev-ref HEAD 2>/dev/null || printf 'unknown')"
 github_repository="${GITHUB_REPOSITORY:-unknown}"
@@ -430,7 +432,7 @@ build_evidence() {
 
   if [[ "${pr_classification}" == "dependency" || "${pr_classification}" == "backend" || "${pr_classification}" == "mixed" ]]; then
     if command -v uv >/dev/null 2>&1 && [[ -f "${workspace}/pyproject.toml" ]]; then
-      run_evidence_command "uv lock consistency check" "${AI_REVIEW_MAX_CHECK_SECONDS:-180}" bash -lc "cd \"${workspace}\" && uv lock --check --offline"
+      run_evidence_command "uv lock consistency check" "${AI_REVIEW_MAX_CHECK_SECONDS:-180}" "${without_credentials[@]}" bash -lc "cd \"${workspace}\" && uv lock --check --offline"
     else
       printf '\n## uv lock consistency check\n\nSkipped: uv is not available or pyproject.toml is absent.\n' >> "${evidence_file}"
     fi
@@ -1319,6 +1321,14 @@ run_codex() {
     fi
   fi
 
+  # Logged in only now, after the evidence commands ran, so they never saw auth.json.
+  if [[ -n "${OPENAI_API_KEY:-}" ]] \
+    && ! codex_login_output="$(printf '%s' "${OPENAI_API_KEY}" | codex login --with-api-key 2>&1)"; then
+    tool_ready="no"
+    tool_error="$(printf '%s' "${codex_login_output}" | sed -n '1p')"
+    return
+  fi
+
   if ! codex_login_status="$(codex login status 2>&1)"; then
     tool_ready="no"
     tool_error="$(printf '%s' "${codex_login_status}" | sed -n '1p')"
@@ -1332,7 +1342,7 @@ run_codex() {
   codex_args+=(-C "${workspace}" -o "${output_file}" -)
 
   if run_with_timeout_from_file "${provider_timeout_seconds}" "${prompt_file}" \
-    codex "${codex_args[@]}" > "${codex_events_file}" 2>&1; then
+    "${without_credentials[@]}" codex "${codex_args[@]}" > "${codex_events_file}" 2>&1; then
     capture_codex_usage "${codex_events_file}"
     capture_review_payload "${output_file}"
   else
@@ -1374,7 +1384,10 @@ run_claude() {
     --input-format text
     --output-format json
     --allowedTools ""
-    --permission-mode bypassPermissions
+    # Ignores the PR's .claude settings, hooks and .mcp.json; read-only tools confined to the workspace.
+    --restricted
+    --strict-mcp-config
+    --tools Read Grep Glob
     --add-dir "${workspace}"
   )
   if [[ -n "${review_model_requested}" ]]; then

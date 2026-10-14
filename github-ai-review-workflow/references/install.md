@@ -19,6 +19,8 @@ Use this when porting the workflow into a new repository.
   - `AI_REVIEW_MODEL`
   - `AI_REVIEW_CLAUDE_MODEL`
   - `AI_REVIEW_CODEX_MODEL`
+- On a runner without a logged-in CLI, add the provider credentials listed in [dependencies](dependencies.md#provider-credentials).
+- Set the `runs-on` labels to a runner pool the repository can use.
 - Add Slack secrets if you want failure alerts:
   - `SLACK_BOT_TOKEN`
   - `SLACK_CHANNEL_ID`

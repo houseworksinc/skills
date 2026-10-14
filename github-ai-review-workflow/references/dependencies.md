@@ -25,6 +25,15 @@
 - `vars.AI_REVIEW_CLAUDE_MODEL`
 - `vars.AI_REVIEW_CODEX_MODEL`
 
+## Provider credentials
+
+A runner that starts each job with an empty HOME, such as the b450 ephemeral pool, has no CLI login. Set these as repository or organization secrets:
+
+- `secrets.ANTHROPIC_API_KEY` or `secrets.CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) for `/ai-review` and `/ai-review claude`
+- `secrets.OPENAI_API_KEY` for `/ai-review codex`
+
+A runner that already has a logged-in CLI needs none of them. An absent secret is unset before the runner starts, so it does not replace that login.
+
 ## Optional Slack secrets
 
 - `secrets.SLACK_BOT_TOKEN`
@@ -37,3 +46,5 @@ If either Slack secret is missing, the workflow should skip the notification rat
 - The workflow assumes a self-hosted runner pool.
 - Update the `runs-on` label list when applying to another repo.
 - The runner must have `node` available so it can execute the checked-in script.
+- The workflow installs the pinned `claude` or `codex` CLI with npm in every job.
+- The workflow runs the runner scripts from the default branch, never from the PR head. Changes to `.github/scripts/` take effect only after they merge.

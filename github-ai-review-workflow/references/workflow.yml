@@ -204,6 +204,17 @@ jobs:
           repository: ${{ steps.resolve.outputs.head_repo }}
           ref: ${{ steps.resolve.outputs.head_sha }}
           fetch-depth: 0
+          persist-credentials: false
+
+      # The review runs the default branch's runner scripts, never the PR's copy.
+      - name: Checkout trusted review runner
+        if: steps.resolve.outputs.eligible == 'yes'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .ai-review-trusted
+          sparse-checkout: .github/scripts
+          persist-credentials: false
 
       - name: Prepare AI review scratch directory
         if: steps.resolve.outputs.eligible == 'yes'
@@ -227,8 +238,8 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: "22.x"
-          # No npm/yarn cache here: this workflow never runs npm/yarn install,
-          # so there is nothing for that cache to speed up. The relevant cache
+          # No npm/yarn cache here: the only install is the pinned review CLI
+          # below, which ephemeral runners fetch fresh anyway. The relevant cache
           # is setup-node's own tool-cache, which self-hosted runners persist
           # across jobs automatically — the Node download only happens once
           # per runner host, not once per /ai-review invocation.
@@ -240,6 +251,19 @@ jobs:
             echo "node is required to execute .github/scripts/ai-review-run.mjs" >&2
             exit 1
           fi
+
+      # Pinned: the runner relies on claude --restricted and codex login --with-api-key.
+      - name: Install AI review CLI
+        if: steps.resolve.outputs.eligible == 'yes'
+        env:
+          PROVIDER: ${{ steps.resolve.outputs.provider }}
+        run: |
+          case "${PROVIDER}" in
+            claude) package="@anthropic-ai/claude-code@2.1.299" ;;
+            codex) package="@openai/codex@0.162.1" ;;
+          esac
+          npm install --global --prefix "${RUNNER_TEMP}/ai-review-cli" --no-fund --no-audit "${package}"
+          echo "${RUNNER_TEMP}/ai-review-cli/bin" >> "${GITHUB_PATH}"
 
       - name: Set up Ruby
         if: steps.resolve.outputs.eligible == 'yes'
@@ -372,8 +396,16 @@ jobs:
           AI_REVIEW_REPO_REVIEW_MODE: ${{ steps.load_repo_ai_review_config.outputs.repo_review_mode }}
           AI_REVIEW_REPO_INLINE_COMMENT_LIMIT: ${{ steps.load_repo_ai_review_config.outputs.repo_inline_comment_limit }}
           AI_REVIEW_REPO_SUMMARY_FINDINGS_LIMIT: ${{ steps.load_repo_ai_review_config.outputs.repo_summary_findings_limit }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          node .github/scripts/ai-review-run.mjs >> "$GITHUB_OUTPUT"
+          # An absent secret arrives as "", which must not mask a CLI login already on the runner.
+          for name in ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN OPENAI_API_KEY; do
+            [[ -n "${!name}" ]] || unset "${name}"
+          done
+          mv .ai-review-trusted "${RUNNER_TEMP}/ai-review-trusted"
+          node "${RUNNER_TEMP}/ai-review-trusted/.github/scripts/ai-review-run.mjs" >> "$GITHUB_OUTPUT"
 
       - name: Post AI review comment
         if: steps.resolve.outputs.eligible == 'yes'
